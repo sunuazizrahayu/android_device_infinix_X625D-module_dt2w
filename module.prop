@@ -1,6 +1,7 @@
 id=dt2w-x625d
 name=DT2W Infinix Hot 7 Pro (X625D)
-version=v0.0.0
+version=v1.0.0
 versionCode=0
 author=Muse Spark
 description=Double Tap to Wake for Infinix HOT 7 PRO X625D on GSI ROM
+updateJson=https://raw.githubusercontent.com/sunuazizrahayu/android_device_infinix_X625D-module_dt2w/main/update.json

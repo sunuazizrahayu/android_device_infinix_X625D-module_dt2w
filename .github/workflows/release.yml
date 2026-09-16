@@ -1,0 +1,139 @@
+name: Release Module
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Parse version from commit message
+        id: ver
+        run: |
+          MSG="$(git log -1 --pretty=%B)"
+          echo "Commit message: $MSG"
+          # Cocokkan 2 pola (case-insensitive):
+          #   1) [release x.x.x] / [release v1.2]  (versi di dalam kurung)
+          #   2) [release] x.x.x / [release]: v1.2.3 (versi di luar kurung)
+          # Contoh valid: [release 1.0.1], [Release v1.2], [release] 1.0.1, [release]: v1.2.3
+          VERSION=""
+          if echo "$MSG" | grep -qiE '\[release[[:space:]]+v?[0-9]+\.[0-9]+(\.[0-9]+)?\]'; then
+            VERSION="$(echo "$MSG" | grep -oiE '\[release[[:space:]]+v?[0-9]+\.[0-9]+(\.[0-9]+)?\]' | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+          elif echo "$MSG" | grep -qiE '\[release\][[:space:]:-]*v?[0-9]+\.[0-9]+(\.[0-9]+)?'; then
+            VERSION="$(echo "$MSG" | grep -oiE '\[release\][[:space:]:-]*v?[0-9]+\.[0-9]+(\.[0-9]+)?' | head -n1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?')"
+          fi
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "do_release=true" >> "$GITHUB_OUTPUT"
+            echo "Detected release version: $VERSION"
+          else
+            echo "do_release=false" >> "$GITHUB_OUTPUT"
+            echo "No [release x.x.x] or [release] x.x.x tag in commit message, skipping."
+          fi
+
+      - name: Stop if not a release commit
+        if: steps.ver.outputs.do_release != 'true'
+        run: echo "Bukan commit rilis, workflow berhenti."
+
+      - name: Prepare module.prop (version + versionCode)
+        if: steps.ver.outputs.do_release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # versionCode pakai run_number agar selalu naik (syarat Magisk/KernelSU)
+          CODE="${{ github.run_number }}"
+          echo "Setting version=v$VERSION versionCode=$CODE"
+          sed -i -E "s/^version=.*/version=v$VERSION/" module.prop
+          sed -i -E "s/^versionCode=.*/versionCode=$CODE/" module.prop
+          # Pastikan updateJson ada (untuk auto-update di Magisk/KernelSU)
+          REPO="${{ github.repository }}"
+          RAW_URL="https://raw.githubusercontent.com/$REPO/main/update.json"
+          if grep -q '^updateJson=' module.prop; then
+            sed -i -E "s|^updateJson=.*|updateJson=$RAW_URL|" module.prop
+          else
+            echo "updateJson=$RAW_URL" >> module.prop
+          fi
+          cat module.prop
+
+      - name: Build flashable zip
+        if: steps.ver.outputs.do_release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ZIP_NAME="dt2w-x625d-${VERSION}.zip"
+          echo "ZIP_NAME=$ZIP_NAME" >> "$GITHUB_ENV"
+          # Bungkus isi modul (tanpa .git, .github, dan update.json)
+          zip -r9 "$ZIP_NAME" \
+            module.prop action.sh post-fs-data.sh service.sh \
+            system META-INF \
+            -x '*.git*' '*.github*' 'update.json'
+          echo "--- isi zip ---"
+          unzip -l "$ZIP_NAME"
+
+      - name: Build changelog
+        if: steps.ver.outputs.do_release == 'true'
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          # Ambil log sejak tag sebelumnya (kalau ada), kalau tidak ambil 10 commit terakhir
+          PREV_TAG="$(git describe --tags --abbrev=0 2>/dev/null || echo '')"
+          if [ -n "$PREV_TAG" ]; then
+            echo "Prev tag: $PREV_TAG"
+            git log "$PREV_TAG..HEAD" --pretty='- %s (%h)' > changelog.txt
+          else
+            git log -10 --pretty='- %s (%h)' > changelog.txt
+          fi
+          cat changelog.txt || echo "- rilis $VERSION" > changelog.txt
+
+      - name: Create GitHub Release
+        if: steps.ver.outputs.do_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          gh release create "$VERSION" \
+            --title "$VERSION" \
+            --notes-file changelog.txt \
+            "$ZIP_NAME"
+
+      - name: Update update.json for Magisk/KSU auto-update
+        if: steps.ver.outputs.do_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          CODE="${{ github.run_number }}"
+          REPO="${{ github.repository }}"
+          ZIP_NAME="dt2w-x625d-${VERSION}.zip"
+          ZIP_URL="https://github.com/$REPO/releases/download/$VERSION/$ZIP_NAME"
+          CHANGELOG="$(cat changelog.txt | head -c 2000)"
+          # Escape changelog untuk JSON (pakai python3 yang selalu ada di runner)
+          CHANGELOG_JSON="$(python3 -c 'import json,sys; print(json.dumps(open("changelog.txt").read().strip()))')"
+          cat > update.json <<EOF
+          {
+            "version": "v$VERSION",
+            "versionCode": $CODE,
+            "zipUrl": "$ZIP_URL",
+            "changelog": $CHANGELOG_JSON
+          }
+          EOF
+          cat update.json
+          # Commit balik update.json + module.prop tanpa memicu rilis baru
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main || true
+          git add update.json module.prop
+          if git diff --staged --quiet; then
+            echo "Tidak ada perubahan untuk di-commit."
+          else
+            # PENTING: pesan ini TIDAK mengandung [release ...] supaya tidak loop
+            git commit -m "chore: update to v$VERSION [skip ci]"
+            git push origin HEAD:main
+          fi
