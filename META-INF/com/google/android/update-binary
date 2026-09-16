@@ -1,0 +1,59 @@
+#!/sbin/sh
+#################
+# Magisk Module Installer
+#################
+
+umask 022
+
+# Global vars
+TMPDIR=/dev/tmp
+PERSISTDIR=/sbin/.magisk/mirror/persist
+
+# Default permissions
+ui_print() { echo "$1"; }
+
+require_new_magisk() {
+  ui_print "*******************************"
+  ui_print " Please install Magisk v20.4+! "
+  ui_print "*******************************"
+  exit 1
+}
+
+OUTFD=$2
+ZIPFILE=$3
+
+mount /data 2>/dev/null
+
+# Load utility functions
+if [ -f /data/adb/magisk/util_functions.sh ]; then
+  . /data/adb/magisk/util_functions.sh
+  NVBASE=/data/adb
+else
+  require_new_magisk
+fi
+
+# Prepare
+INSTALLER=$TMPDIR/install
+rm -rf $TMPDIR 2>/dev/null
+mkdir -p $INSTALLER
+unzip -o "$ZIPFILE" -x 'META-INF/*' -d $INSTALLER >&2
+
+# Set permissions
+set_perm_recursive $INSTALLER 0 0 0755 0644
+set_perm $INSTALLER/service.sh 0 0 0755
+set_perm $INSTALLER/post-fs-data.sh 0 0 0755
+set_perm $INSTALLER/action.sh 0 0 0755
+
+# Install
+MODID=dt2w-x625d
+MODPATH=$NVBASE/modules_update/$MODID
+rm -rf $MODPATH 2>/dev/null
+mkdir -p $MODPATH
+cp -af $INSTALLER/* $MODPATH/
+mkdir -p $NVBASE/modules/$MODID
+cp -af $INSTALLER/module.prop $NVBASE/modules/$MODID/ 2>/dev/null
+rm -rf $INSTALLER
+rm -rf $TMPDIR 2>/dev/null
+
+ui_print "- DT2W X625D terinstal. Reboot untuk mengaktifkan."
+exit 0

@@ -1,0 +1,18 @@
+# Infinix HOT 7 PRO X625D — key layout khusus touchscreen (mtk-tpd / Novatek NT36672A)
+#
+# Kenapa file ini ada:
+#  - Driver gesture DT2W melaporkan KEY_F13 (kode 183) saat double-tap dalam
+#    keadaan layar mati (terbukti via getevent: "EV_KEY KEY_F13 DOWN/UP").
+#  - Di GSI, mtk-tpd jatuh ke Generic.kl yang TIDAK memetakan 183 sama sekali,
+#    dan key 116 POWER di sana tidak punya flag WAKE. Akibatnya event gesture
+#    diabaikan dan layar tidak menyala walau driver sudah mendeteksi ketukan.
+#  - File ini (mtk-tpd.kl) diprioritaskan Android di atas Generic.kl khusus
+#    untuk device "mtk-tpd", dan flag WAKE membuat event membangunkan layar.
+#
+# Catatan: F13/F14 hanya dikirim driver saat layar mati (mode gesture), jadi
+# aman dipetakan ke POWER — tidak akan mematikan layar saat sedang menyala.
+
+key 116   POWER WAKE
+key 143   WAKEUP WAKE
+key 183   POWER WAKE
+key 184   POWER WAKE
